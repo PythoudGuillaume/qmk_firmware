@@ -26,7 +26,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define DEVICE_VER      0x0001
 #define MANUFACTURER    wootpatoot
 #define PRODUCT         maxipad
-#define DESCRIPTION     A custom keyboard
+#define DESCRIPTION     a sensitive gamepad
 
 /* key matrix size */
 #define MATRIX_ROWS 5
