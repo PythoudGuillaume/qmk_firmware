@@ -1,3 +1,19 @@
+/* Copyright 2016-2017 Jack Humbert
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "quantum.h"
 #ifdef PROTOCOL_LUFA
 #include "outputselect.h"
@@ -98,8 +114,8 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 
 void reset_keyboard(void) {
   clear_keyboard();
-#ifdef AUDIO_ENABLE
-  stop_all_notes();
+#if defined(AUDIO_ENABLE) || (defined(MIDI_ENABLE) && defined(MIDI_ENABLE_BASIC))
+  music_all_notes_off();
   shutdown_user();
 #endif
   wait_ms(250);
@@ -119,7 +135,7 @@ void reset_keyboard(void) {
 #endif
 
 static bool shift_interrupted[2] = {0, 0};
-static uint16_t scs_timer = 0;
+static uint16_t scs_timer[2] = {0, 0};
 
 bool process_record_quantum(keyrecord_t *record) {
 
@@ -153,10 +169,13 @@ bool process_record_quantum(keyrecord_t *record) {
 
   if (!(
     process_record_kb(keycode, record) &&
-  #ifdef MIDI_ENABLE
+  #if defined(MIDI_ENABLE) && defined(MIDI_ADVANCED)
     process_midi(keycode, record) &&
   #endif
   #ifdef AUDIO_ENABLE
+    process_audio(keycode, record) &&
+  #endif
+  #if defined(AUDIO_ENABLE) || (defined(MIDI_ENABLE) && defined(MIDI_BASIC))
     process_music(keycode, record) &&
   #endif
   #ifdef TAP_DANCE_ENABLE
@@ -294,14 +313,6 @@ bool process_record_quantum(keyrecord_t *record) {
       return false;
       break;
     #endif
-    #ifdef ADAFRUIT_BLE_ENABLE
-    case OUT_BLE:
-      if (record->event.pressed) {
-        set_output(OUTPUT_ADAFRUIT_BLE);
-      }
-      return false;
-      break;
-    #endif
     #endif
     case MAGIC_SWAP_CONTROL_CAPSLOCK ... MAGIC_TOGGLE_NKRO:
       if (record->event.pressed) {
@@ -384,7 +395,7 @@ bool process_record_quantum(keyrecord_t *record) {
     case KC_LSPO: {
       if (record->event.pressed) {
         shift_interrupted[0] = false;
-        scs_timer = timer_read ();
+        scs_timer[0] = timer_read ();
         register_mods(MOD_BIT(KC_LSFT));
       }
       else {
@@ -394,7 +405,7 @@ bool process_record_quantum(keyrecord_t *record) {
             shift_interrupted[1] = true;
           }
         #endif
-        if (!shift_interrupted[0] && timer_elapsed(scs_timer) < TAPPING_TERM) {
+        if (!shift_interrupted[0] && timer_elapsed(scs_timer[0]) < TAPPING_TERM) {
           register_code(LSPO_KEY);
           unregister_code(LSPO_KEY);
         }
@@ -407,7 +418,7 @@ bool process_record_quantum(keyrecord_t *record) {
     case KC_RSPC: {
       if (record->event.pressed) {
         shift_interrupted[1] = false;
-        scs_timer = timer_read ();
+        scs_timer[1] = timer_read ();
         register_mods(MOD_BIT(KC_RSFT));
       }
       else {
@@ -417,7 +428,7 @@ bool process_record_quantum(keyrecord_t *record) {
             shift_interrupted[1] = true;
           }
         #endif
-        if (!shift_interrupted[1] && timer_elapsed(scs_timer) < TAPPING_TERM) {
+        if (!shift_interrupted[1] && timer_elapsed(scs_timer[1]) < TAPPING_TERM) {
           register_code(RSPC_KEY);
           unregister_code(RSPC_KEY);
         }
@@ -425,6 +436,14 @@ bool process_record_quantum(keyrecord_t *record) {
       }
       return false;
       // break;
+    }
+    case GRAVE_ESC: {
+      void (*method)(uint8_t) = (record->event.pressed) ? &add_key : &del_key;
+      uint8_t shifted = get_mods() & ((MOD_BIT(KC_LSHIFT)|MOD_BIT(KC_RSHIFT)
+                                      |MOD_BIT(KC_LGUI)|MOD_BIT(KC_RGUI)));
+
+      method(shifted ? KC_GRAVE : KC_ESCAPE);
+      send_keyboard_report(); 
     }
     default: {
       shift_interrupted[0] = true;
@@ -436,7 +455,8 @@ bool process_record_quantum(keyrecord_t *record) {
   return process_action_kb(record);
 }
 
-const bool ascii_to_qwerty_shift_lut[0x80] PROGMEM = {
+__attribute__ ((weak))
+const bool ascii_to_shift_lut[0x80] PROGMEM = {
     0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0,
@@ -455,7 +475,8 @@ const bool ascii_to_qwerty_shift_lut[0x80] PROGMEM = {
     0, 0, 0, 1, 1, 1, 1, 0
 };
 
-const uint8_t ascii_to_qwerty_keycode_lut[0x80] PROGMEM = {
+__attribute__ ((weak))
+const uint8_t ascii_to_keycode_lut[0x80] PROGMEM = {
     0, 0, 0, 0, 0, 0, 0, 0,
     KC_BSPC, KC_TAB, KC_ENT, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0,
@@ -474,57 +495,17 @@ const uint8_t ascii_to_qwerty_keycode_lut[0x80] PROGMEM = {
     KC_X, KC_Y, KC_Z, KC_LBRC, KC_BSLS, KC_RBRC, KC_GRV, KC_DEL
 };
 
-/* for users whose OSes are set to Colemak */
-#if 0
-#include "keymap_colemak.h"
-
-const bool ascii_to_colemak_shift_lut[0x80] PROGMEM = {
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 1, 1, 1, 1, 1, 1, 0,
-    1, 1, 1, 1, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 1, 0, 1, 0, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 0, 0, 0, 1, 1,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 1, 1, 1, 1, 0
-};
-
-const uint8_t ascii_to_colemak_keycode_lut[0x80] PROGMEM = {
-    0, 0, 0, 0, 0, 0, 0, 0,
-    KC_BSPC, KC_TAB, KC_ENT, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, KC_ESC, 0, 0, 0, 0,
-    KC_SPC, KC_1, KC_QUOT, KC_3, KC_4, KC_5, KC_7, KC_QUOT,
-    KC_9, KC_0, KC_8, KC_EQL, KC_COMM, KC_MINS, KC_DOT, KC_SLSH,
-    KC_0, KC_1, KC_2, KC_3, KC_4, KC_5, KC_6, KC_7,
-    KC_8, KC_9, CM_SCLN, CM_SCLN, KC_COMM, KC_EQL, KC_DOT, KC_SLSH,
-    KC_2, CM_A, CM_B, CM_C, CM_D, CM_E, CM_F, CM_G,
-    CM_H, CM_I, CM_J, CM_K, CM_L, CM_M, CM_N, CM_O,
-    CM_P, CM_Q, CM_R, CM_S, CM_T, CM_U, CM_V, CM_W,
-    CM_X, CM_Y, CM_Z, KC_LBRC, KC_BSLS, KC_RBRC, KC_6, KC_MINS,
-    KC_GRV, CM_A, CM_B, CM_C, CM_D, CM_E, CM_F, CM_G,
-    CM_H, CM_I, CM_J, CM_K, CM_L, CM_M, CM_N, CM_O,
-    CM_P, CM_Q, CM_R, CM_S, CM_T, CM_U, CM_V, CM_W,
-    CM_X, CM_Y, CM_Z, KC_LBRC, KC_BSLS, KC_RBRC, KC_GRV, KC_DEL
-};
-
-#endif
-
 void send_string(const char *str) {
+  send_string_with_delay(str, 0);
+}
+
+void send_string_with_delay(const char *str, uint8_t interval) {
     while (1) {
         uint8_t keycode;
         uint8_t ascii_code = pgm_read_byte(str);
         if (!ascii_code) break;
-        keycode = pgm_read_byte(&ascii_to_qwerty_keycode_lut[ascii_code]);
-        if (pgm_read_byte(&ascii_to_qwerty_shift_lut[ascii_code])) {
+        keycode = pgm_read_byte(&ascii_to_keycode_lut[ascii_code]);
+        if (pgm_read_byte(&ascii_to_shift_lut[ascii_code])) {
             register_code(KC_LSFT);
             register_code(keycode);
             unregister_code(keycode);
@@ -535,6 +516,8 @@ void send_string(const char *str) {
             unregister_code(keycode);
         }
         ++str;
+        // interval
+        { uint8_t ms = interval; while (ms--) wait_ms(1); }
     }
 }
 
